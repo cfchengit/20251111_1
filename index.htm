@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>教室座位圖 (點擊載入版)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+    <style>
+        body {
+            padding: 0;
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #controls {
+            padding: 10px;
+            background: #f0f0f0;
+            border-bottom: 1px solid #ccc;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            z-index: 10;
+        }
+        #controls label {
+            margin: 0 5px 0 15px;
+        }
+        #controls select, #controls button {
+            font-size: 14px;
+            padding: 5px;
+        }
+        #canvas-container {
+            margin-top: 60px; /* 等於 controls 的高度 */
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <label for="selMonth">月:</label>
+        <select id="selMonth">
+            </select>
+
+        <label for="selDay">日:</label>
+        <select id="selDay">
+            </select>
+
+        <label for="selSession">節:</label>
+        <select id="selSession">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+        </select>
+
+        <button id="loadButton">載入資料</button>
+    </div>
+
+    <div id="canvas-container"></div>
+
+
+    <script>
+        
+        // --- 1. 資料變數 (一開始為空) ---
+        let seatData = {};
+        let nonConformingData = [];
+        let duplicateIpData = [];
+        let fileLoadMessage = ""; // 【新增】 用於顯示 "該日沒有上課"
+
+        const min_ip_octet = 101;
+        const max_ip_octet = 194; 
+
+        // --- 2. HTML 元素 ---
+        let selMonth, selDay, selSession, loadButton, canvasContainer;
+
+        // --- 3. 填入下拉選單 ---
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log("DOM content loaded. Populating dropdowns...");
+            const monthSelect = document.getElementById('selMonth');
+            const daySelect = document.getElementById('selDay');
+
+            if (monthSelect) {
+                monthSelect.innerHTML = ''; // 清空
+                for (let i = 1; i <= 12; i++) {
+                    let opt = document.createElement('option');
+                    opt.value = i;
+                    opt.innerHTML = i;
+                    monthSelect.appendChild(opt);
+                }
+            } else {
+                console.error("Could not find #selMonth");
+            }
+
+            if (daySelect) {
+                daySelect.innerHTML = ''; // 清空
+                for (let i = 1; i <= 31; i++) {
+                    let opt = document.createElement('option');
+                    opt.value = i;
+                    opt.innerHTML = i;
+                    daySelect.appendChild(opt);
+                }
+            } else {
+                console.error("Could not find #selDay");
+            }
+        });
+        
+        // --- 4. 移除了 preload() 函式 ---
+        
+        // --- 5. Setup: 處理資料並設定畫布 ---
+        function setup() {
+            let controlsDiv = document.getElementById('controls');
+            let canvasHeight = windowHeight - controlsDiv.offsetHeight;
+            
+            let canvas = createCanvas(windowWidth, canvasHeight);
+            canvasContainer = select('#canvas-container');
+            canvas.parent(canvasContainer); 
+            
+            textFont('Arial');
+            
+            // --- 獲取 HTML 元素 ---
+            selMonth = select('#selMonth');
+            selDay = select('#selDay');
+            selSession = select('#selSession');
+            loadButton = select('#loadButton');
+
+            if (!selMonth || !selDay || !selSession || !loadButton) {
+                console.error("p5.js failed to select control elements.");
+                return;
+            }
+            
+            // --- 綁定按鈕事件 ---
+            loadButton.mousePressed(loadNewData);
+            
+            // --- 計算一次空佈局 ---
+            calculateLayout(); 
+        }
+
+        // --- 6. 資料處理 (動態載入) ---
+        
+        function loadNewData() {
+            let month = selMonth.value();
+            let day = selDay.value();
+            let session = selSession.value();
+            
+            let monthStr = nf(month, 2); // 格式化為 "01"
+            let dayStr = nf(day, 2);   // 格式化為 "04"
+            
+            let filename = `回覆紀錄_${monthStr}${dayStr}_${session}.csv`;
+            
+            console.log("嘗試載入:", filename);
+            loadTable(filename, 'csv', 'header', onDataLoaded, onDataError);
+        }
+        
+        // 檔案載入成功的回呼
+        function onDataLoaded(table) {
+            console.log("成功載入:", table.getRowCount(), "行資料");
+            
+            // 【修改處】 清空錯誤訊息
+            fileLoadMessage = ""; 
+            
+            seatData = {};
+            nonConformingData = [];
+            duplicateIpData = [];
+            
+            processData(table);
+            calculateLayout();
+        }
+        
+        // 檔案載入失敗的回呼
+        function onDataError(error) {
+            console.error("檔案載入失敗:", error);
+            
+            // 【修改處】 不使用 alert，改為設定訊息
+            fileLoadMessage = "該日沒有上課";
+            // alert(`錯誤：找不到檔案 ${error.config.url}。\n請確認檔案名稱與位置是否正確。`);
+            
+            // 載入失敗，清空畫布
+            seatData = {};
+            nonConformingData = [];
+            duplicateIpData = [];
+            calculateLayout(); // 重新計算佈局以顯示錯誤訊息
+        }
+
+        // --- 7. 資料解析 (與前一版相同) ---
+        function processData(table) {
+            let ip_to_students_map = {};
+
+            for (let row of table.getRows()) {
+                let ip_string = row.getString('標題').trim();
+                let student_name = row.getString('姓名');
+                let student_id = row.getString('帳號');
+                
+                let student_info = {
+                    'name': student_name,
+                    'id': student_id,
+                    'ip': ip_string
+                };
+
+                if (!ip_to_students_map[ip_string]) {
+                    ip_to_students_map[ip_string] = [];
+                }
+                ip_to_students_map[ip_string].push(student_info);
+            }
+
+            for (let ip_string in ip_to_students_map) {
+                let student_list = ip_to_students_map[ip_string];
+
+                if (!ip_string.startsWith("163.13.179.")) {
+                    nonConformingData.push(...student_list);
+                    continue; 
+                }
+
+                if (student_list.length > 1) {
+                    duplicateIpData.push(...student_list);
+                    continue; 
+                }
+
+                let student_info = student_list[0];
+
+                try {
+                    let parts = ip_string.split('.');
+                    let last_octet_str = parts[parts.length - 1];
+                    let last_octet_int = parseInt(last_octet_str, 10);
+                    
+                    if (isNaN(last_octet_int)) { throw new Error("無法解析 IP 尾數"); }
+
+                    if (last_octet_int >= min_ip_octet && last_octet_int <= max_ip_octet) {
+                        seatData[last_octet_int] = {
+                            'name': student_info.name,
+                            'id': student_info.id
+                        };
+                    } else {
+                        nonConformingData.push(student_info);
+                    }
+                } catch (e) {
+                    student_info.ip = `${ip_string} (解析錯誤: ${e.message})`;
+                    nonConformingData.push(student_info);
+                }
+            }
+        }
+
+        // --- 8. 繪圖 ---
+        
+        let boxWidth, boxHeight, hSpacing, vSpacing;
+        let sideMargin, topMargin, bottomMargin, lecternHeight;
+        
+        const numRows = 6;
+        const maxCols = 18; 
+        const gridLayout = { g1_max: 4, aisle1: 1, g2_max: 8, aisle2: 1, g3_max: 4 };
+        const rowLayouts = [
+            [3, 8, 3], [4, 8, 4], [4, 8, 4], [4, 8, 4], [4, 8, 4], [4, 8, 4]
+        ];
+        
+        let headerHeight = 0; 
+
+        // 【修改處】 重新計算佈局高度
+        function calculateLayout() {
+            
+            if (fileLoadMessage) {
+                // 如果有錯誤訊息，只給它空間
+                headerHeight = 60;
+            } else {
+                // 否則，正常計算列表高度
+                let list1_height = (nonConformingData.length > 0) ? (nonConformingData.length * 18 + 40) : 40;
+                let list2_height = (duplicateIpData.length > 0) ? (duplicateIpData.length * 18 + 40) : 40;
+                headerHeight = list1_height + list2_height;
+            }
+            
+            lecternHeight = 50;
+            topMargin = headerHeight + 20; 
+            bottomMargin = lecternHeight + 60; 
+            sideMargin = 40;
+            
+            let controlsDiv = document.getElementById('controls');
+            let availableCanvasHeight = windowHeight - controlsDiv.offsetHeight;
+            
+            let availableHeight = availableCanvasHeight - topMargin - bottomMargin;
+            let availableWidth = width - 2 * sideMargin;
+            
+            boxWidth = availableWidth / maxCols * 0.9; 
+            boxHeight = availableHeight / numRows * 0.85;
+            
+            hSpacing = (availableWidth - maxCols * boxWidth) / (maxCols - 1);
+            vSpacing = (availableHeight - numRows * boxHeight) / (numRows - 1);
+            
+            if (hSpacing < 2) hSpacing = 2;
+            if (vSpacing < 5) vSpacing = 5;
+        }
+
+        function draw() {
+            background(245, 245, 245); 
+            drawLists();
+            drawLectern();
+            drawSeatingChart();
+        }
+        
+        // 【修改處】 繪製列表 (優先顯示錯誤訊息)
+        function drawLists() {
+            push();
+            textAlign(LEFT, TOP);
+            let currentY = 15; 
+
+            // 1. 檢查是否有檔案載入訊息
+            if (fileLoadMessage) {
+                fill(200, 0, 0); // 紅色
+                textSize(16);
+                textAlign(CENTER, TOP); // 置中
+                text(fileLoadMessage, width / 2, currentY + 10);
+                pop(); // 結束 drawLists
+                return;
+            }
+
+            // 2. 如果沒有載入訊息，才顯示 IP 列表
+            fill(180, 0, 0); 
+            textSize(14);
+            text("IP 非 163.13.179.x 或範圍外的學生:", 20, currentY);
+            currentY += 25;
+            
+            if (nonConformingData.length > 0) {
+                textSize(12); fill(0);
+                nonConformingData.forEach((student) => {
+                    text(`${student.name} (${student.id}) - IP: ${student.ip}`, 20, currentY);
+                    currentY += 18;
+                });
+            } else {
+                textSize(12); fill(80);
+                text("(無)", 20, currentY); currentY += 18;
+            }
+            
+            currentY += 15; 
+
+            fill(0, 0, 180); 
+            textSize(14);
+            text("IP 重複的學生 (該座位將顯示為空):", 20, currentY);
+            currentY += 25;
+            
+            if (duplicateIpData.length > 0) {
+                textSize(12); fill(0);
+                duplicateIpData.forEach((student) => {
+                    text(`${student.name} (${student.id}) - 共用 IP: ${student.ip}`, 20, currentY);
+                    currentY += 18;
+                });
+            } else {
+                textSize(12); fill(80);
+                text("(無)", 20, currentY); currentY += 18;
+            }
+            pop();
+        }
+
+        function drawLectern() {
+            push();
+            let lecternWidth = 120;
+            let lecternY = height - lecternHeight - 20;
+            let lecternX = width / 2 - lecternWidth / 2;
+            
+            fill(150, 100, 80); 
+            noStroke();
+            rect(lecternX, lecternY, lecternWidth, lecternHeight, 5);
+            fill(0);
+            textSize(16);
+            textAlign(CENTER, CENTER);
+            text("講台", lecternX + lecternWidth / 2, lecternY + lecternHeight / 2);
+            pop();
+        }
+
+        function drawSeatingChart() {
+            push();
+            let ipCounter = 101; 
+            let startY = height - bottomMargin - boxHeight; 
+            
+            let totalChartHeight = numRows * (boxHeight + vSpacing) - vSpacing;
+            let totalChartWidth = maxCols * (boxWidth + hSpacing) - hSpacing;
+            noFill();
+            stroke(200);
+            strokeWeight(2);
+            rect(sideMargin - (boxWidth*0.1), 
+                 startY - (numRows-1)*(boxHeight + vSpacing) - (boxHeight*0.1), 
+                 totalChartWidth + (boxWidth*0.2), 
+                 totalChartHeight + (boxHeight*0.2));
+
+            for (let r = 0; r < numRows; r++) { 
+                let y = startY - r * (boxHeight + vSpacing);
+                let [g_right, g_mid, g_left] = rowLayouts[r];
+                let currentVirtualCol = 0; 
+
+                // G1 (右邊)
+                let offsetR = gridLayout.g1_max - g_right;
+                currentVirtualCol += offsetR; 
+                for (let i = 0; i < g_right; i++) {
+                    let x = sideMargin + (maxCols - 1 - currentVirtualCol) * (boxWidth + hSpacing);
+                    drawSeat(x, y, ipCounter, seatData[ipCounter]);
+                    ipCounter++;
+                    currentVirtualCol++;
+                }
+
+                // G2 (中間)
+                currentVirtualCol = gridLayout.g1_max + gridLayout.aisle1;
+                let offsetM = gridLayout.g2_max - g_mid;
+                currentVirtualCol += offsetM; 
+                for (let i = 0; i < g_mid; i++) {
+                    let x = sideMargin + (maxCols - 1 - currentVirtualCol) * (boxWidth + hSpacing);
+                    drawSeat(x, y, ipCounter, seatData[ipCounter]);
+                    ipCounter++;
+                    currentVirtualCol++;
+                }
+                
+                // G3 (左邊)
+                currentVirtualCol = gridLayout.g1_max + gridLayout.aisle1 + gridLayout.g2_max + gridLayout.aisle2;
+                let offsetL = gridLayout.g3_max - g_left;
+                currentVirtualCol += offsetL; 
+                for (let i = 0; i < g_left; i++) {
+                    let x = sideMargin + (maxCols - 1 - currentVirtualCol) * (boxWidth + hSpacing);
+                    drawSeat(x, y, ipCounter, seatData[ipCounter]);
+                    ipCounter++;
+                    currentVirtualCol++;
+                }
+            }
+            pop();
+        }
+        
+        function drawSeat(x, y, ipNum, student) {
+            push(); 
+            
+            if (student) { fill(200, 255, 200); } 
+            else { fill(255); }
+            
+            let isDuplicate = false;
+            for(let s of duplicateIpData) {
+                if (s.ip.endsWith("." + ipNum)) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (isDuplicate) { fill(255, 200, 200); }
+
+            stroke(180); 
+            strokeWeight(1);
+            rect(x, y, boxWidth, boxHeight, 3); 
+
+            fill(0); 
+            noStroke();
+            textAlign(CENTER, CENTER);
+            textSize(min(10, boxWidth / 9)); 
+
+            if (student) {
+                text(student.name, x + boxWidth / 2, y + boxHeight / 2 - 8);
+                text(student.id, x + boxWidth / 2, y + boxHeight / 2 + 8);
+            } else {
+                text(ipNum, x + boxWidth / 2, y + boxHeight / 2);
+            }
+            
+            pop(); 
+        }
+
+        function windowResized() {
+            let controlsDiv = document.getElementById('controls');
+            let canvasHeight = windowHeight - controlsDiv.offsetHeight;
+            resizeCanvas(windowWidth, canvasHeight);
+            calculateLayout(); 
+        }
+    </script>
+</body>
+</html>
