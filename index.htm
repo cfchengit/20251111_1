@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>教室座位圖 (點擊載入版)</title>
+    <title>教室座位圖 (置中版)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
     <style>
         body {
@@ -64,10 +64,11 @@
         let seatData = {};
         let nonConformingData = [];
         let duplicateIpData = [];
-        let fileLoadMessage = ""; // 【新增】 用於顯示 "該日沒有上課"
+        let fileLoadMessage = ""; 
 
+        // --- IP 範圍 ---
         const min_ip_octet = 101;
-        const max_ip_octet = 194; 
+        const max_ip_octet = 174; // 73 個位置 + 跳過 131 = 101 到 174
 
         // --- 2. HTML 元素 ---
         let selMonth, selDay, selSession, loadButton, canvasContainer;
@@ -116,7 +117,6 @@
             
             textFont('Arial');
             
-            // --- 獲取 HTML 元素 ---
             selMonth = select('#selMonth');
             selDay = select('#selDay');
             selSession = select('#selSession');
@@ -127,10 +127,7 @@
                 return;
             }
             
-            // --- 綁定按鈕事件 ---
             loadButton.mousePressed(loadNewData);
-            
-            // --- 計算一次空佈局 ---
             calculateLayout(); 
         }
 
@@ -141,8 +138,8 @@
             let day = selDay.value();
             let session = selSession.value();
             
-            let monthStr = nf(month, 2); // 格式化為 "01"
-            let dayStr = nf(day, 2);   // 格式化為 "04"
+            let monthStr = nf(month, 2); 
+            let dayStr = nf(day, 2);   
             
             let filename = `回覆紀錄_${monthStr}${dayStr}_${session}.csv`;
             
@@ -150,37 +147,26 @@
             loadTable(filename, 'csv', 'header', onDataLoaded, onDataError);
         }
         
-        // 檔案載入成功的回呼
         function onDataLoaded(table) {
             console.log("成功載入:", table.getRowCount(), "行資料");
-            
-            // 【修改處】 清空錯誤訊息
             fileLoadMessage = ""; 
-            
             seatData = {};
             nonConformingData = [];
             duplicateIpData = [];
-            
             processData(table);
             calculateLayout();
         }
         
-        // 檔案載入失敗的回呼
         function onDataError(error) {
             console.error("檔案載入失敗:", error);
-            
-            // 【修改處】 不使用 alert，改為設定訊息
             fileLoadMessage = "該日沒有上課";
-            // alert(`錯誤：找不到檔案 ${error.config.url}。\n請確認檔案名稱與位置是否正確。`);
-            
-            // 載入失敗，清空畫布
             seatData = {};
             nonConformingData = [];
             duplicateIpData = [];
-            calculateLayout(); // 重新計算佈局以顯示錯誤訊息
+            calculateLayout(); 
         }
 
-        // --- 7. 資料解析 (與前一版相同) ---
+        // --- 7. 資料解析 ---
         function processData(table) {
             let ip_to_students_map = {};
 
@@ -223,12 +209,17 @@
                     
                     if (isNaN(last_octet_int)) { throw new Error("無法解析 IP 尾數"); }
 
-                    if (last_octet_int >= min_ip_octet && last_octet_int <= max_ip_octet) {
+                    // 檢查範圍並排除 131
+                    if (last_octet_int >= min_ip_octet && last_octet_int <= max_ip_octet && last_octet_int !== 131) {
                         seatData[last_octet_int] = {
                             'name': student_info.name,
                             'id': student_info.id
                         };
                     } else {
+                        // Add to non-conforming if it's 131 or out of range
+                        if (last_octet_int === 131) {
+                             student_info.ip += " (無效座位 131)";
+                        }
                         nonConformingData.push(student_info);
                     }
                 } catch (e) {
@@ -243,23 +234,25 @@
         let boxWidth, boxHeight, hSpacing, vSpacing;
         let sideMargin, topMargin, bottomMargin, lecternHeight;
         
-        const numRows = 6;
-        const maxCols = 18; 
+        const numRows = 5;
+        const maxCols = 18; // 虛擬網格: [G1(4), Aisle(1), G2(8), Aisle(1), G3(4)]
         const gridLayout = { g1_max: 4, aisle1: 1, g2_max: 8, aisle2: 1, g3_max: 4 };
+        
         const rowLayouts = [
-            [4, 8, 3], [4, 7, 4], [4, 7, 4], [4, 6, 4], [4, 6, 4]
+            [4, 8, 3], // 第 1 排 (底)
+            [4, 7, 4], // 第 2 排
+            [4, 7, 4], // 第 3 排
+            [4, 6, 4], // 第 4 排
+            [4, 6, 4]  // 第 5 排 (頂)
         ];
         
         let headerHeight = 0; 
 
-        // 【修改處】 重新計算佈局高度
         function calculateLayout() {
             
             if (fileLoadMessage) {
-                // 如果有錯誤訊息，只給它空間
                 headerHeight = 60;
             } else {
-                // 否則，正常計算列表高度
                 let list1_height = (nonConformingData.length > 0) ? (nonConformingData.length * 18 + 40) : 40;
                 let list2_height = (duplicateIpData.length > 0) ? (duplicateIpData.length * 18 + 40) : 40;
                 headerHeight = list1_height + list2_height;
@@ -277,7 +270,7 @@
             let availableWidth = width - 2 * sideMargin;
             
             boxWidth = availableWidth / maxCols * 0.9; 
-            boxHeight = availableHeight / numRows * 0.85;
+            boxHeight = availableHeight / numRows * 0.85; 
             
             hSpacing = (availableWidth - maxCols * boxWidth) / (maxCols - 1);
             vSpacing = (availableHeight - numRows * boxHeight) / (numRows - 1);
@@ -293,23 +286,20 @@
             drawSeatingChart();
         }
         
-        // 【修改處】 繪製列表 (優先顯示錯誤訊息)
         function drawLists() {
             push();
             textAlign(LEFT, TOP);
             let currentY = 15; 
 
-            // 1. 檢查是否有檔案載入訊息
             if (fileLoadMessage) {
-                fill(200, 0, 0); // 紅色
+                fill(200, 0, 0); 
                 textSize(16);
-                textAlign(CENTER, TOP); // 置中
+                textAlign(CENTER, TOP); 
                 text(fileLoadMessage, width / 2, currentY + 10);
-                pop(); // 結束 drawLists
+                pop(); 
                 return;
             }
 
-            // 2. 如果沒有載入訊息，才顯示 IP 列表
             fill(180, 0, 0); 
             textSize(14);
             text("IP 非 163.13.179.x 或範圍外的學生:", 20, currentY);
@@ -377,6 +367,7 @@
                  totalChartWidth + (boxWidth*0.2), 
                  totalChartHeight + (boxHeight*0.2));
 
+            // 迴圈畫 5 排
             for (let r = 0; r < numRows; r++) { 
                 let y = startY - r * (boxHeight + vSpacing);
                 let [g_right, g_mid, g_left] = rowLayouts[r];
@@ -386,6 +377,7 @@
                 let offsetR = gridLayout.g1_max - g_right;
                 currentVirtualCol += offsetR; 
                 for (let i = 0; i < g_right; i++) {
+                    if (ipCounter === 131) { ipCounter++; } // 跳過 131
                     let x = sideMargin + (maxCols - 1 - currentVirtualCol) * (boxWidth + hSpacing);
                     drawSeat(x, y, ipCounter, seatData[ipCounter]);
                     ipCounter++;
@@ -394,9 +386,13 @@
 
                 // G2 (中間)
                 currentVirtualCol = gridLayout.g1_max + gridLayout.aisle1;
-                let offsetM = gridLayout.g2_max - g_mid;
+                // --- 【*** 修改處 ***】 ---
+                // 使用 floor(.../2) 來計算置中位移
+                let offsetM = floor((gridLayout.g2_max - g_mid) / 2); 
                 currentVirtualCol += offsetM; 
+                // --- 【*** 修改結束 ***】 ---
                 for (let i = 0; i < g_mid; i++) {
+                    if (ipCounter === 131) { ipCounter++; } // 跳過 131
                     let x = sideMargin + (maxCols - 1 - currentVirtualCol) * (boxWidth + hSpacing);
                     drawSeat(x, y, ipCounter, seatData[ipCounter]);
                     ipCounter++;
@@ -405,9 +401,10 @@
                 
                 // G3 (左邊)
                 currentVirtualCol = gridLayout.g1_max + gridLayout.aisle1 + gridLayout.g2_max + gridLayout.aisle2;
-                let offsetL = gridLayout.g3_max - g_left;
+                let offsetL = gridLayout.g3_max - g_left; 
                 currentVirtualCol += offsetL; 
                 for (let i = 0; i < g_left; i++) {
+                    if (ipCounter === 131) { ipCounter++; } // 跳過 131
                     let x = sideMargin + (maxCols - 1 - currentVirtualCol) * (boxWidth + hSpacing);
                     drawSeat(x, y, ipCounter, seatData[ipCounter]);
                     ipCounter++;
@@ -459,5 +456,4 @@
         }
     </script>
 </body>
-
 </html>
